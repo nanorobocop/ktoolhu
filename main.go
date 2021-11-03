@@ -25,13 +25,6 @@ var (
 	update   int
 	parallel int
 	size     int
-	//padding  string
-
-	rootCmd = &cobra.Command{
-		Use:               "ktoolhu",
-		Short:             "Ktoolhu is tool to do various weird stuff with Kubernetes API",
-		CompletionOptions: cobra.CompletionOptions{DisableDefaultCmd: true},
-	}
 
 	padding = func() (p string) {
 		for i := 0; i < size; i++ {
@@ -39,6 +32,12 @@ var (
 		}
 		return
 	}()
+
+	rootCmd = &cobra.Command{
+		Use:               "ktoolhu",
+		Short:             "Ktoolhu is tool to do various weird stuff with Kubernetes API",
+		CompletionOptions: cobra.CompletionOptions{DisableDefaultCmd: true},
+	}
 
 	perfLoadConfigMapsCmd = &cobra.Command{
 		Use:   "perf-configmaps",
@@ -89,12 +88,13 @@ Could be useful to check speed of K8s api or trigger etcd compact/defrag feature
 					defer func() { <-parallelCh }()
 
 					cm := buildCM(i, padding)
+					cm.Name = fmt.Sprintf("ktoolhu-%d", i%create)
 
 					_, err := client.Update(ctx, cm, metav1.UpdateOptions{})
 					if err != nil {
 						fmt.Printf("Failed to create configmap: %+v\n", err)
 					}
-				}(i % create)
+				}(i)
 			}
 
 			wg.Wait()
