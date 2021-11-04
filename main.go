@@ -56,48 +56,24 @@ Could be useful to check speed of K8s api or trigger etcd compact/defrag feature
 
 			client := clientset.CoreV1().ConfigMaps(namespace)
 
-			wg := sync.WaitGroup{}
+			runParallel(parallel, create, func(i int) {
+				cm := buildCM(i, padding)
 
-			parallelCh := make(chan struct{}, parallel)
+				_, err := client.Create(ctx, cm, metav1.CreateOptions{})
+				if err != nil && !kerrors.IsAlreadyExists(err) {
+					fmt.Printf("Failed to create configmap: %+v\n", err)
+				}
+			})
 
-			for i := 0; i < create; i++ {
-				parallelCh <- struct{}{}
+			runParallel(parallel, update, func(i int) {
+				cm := buildCM(i, padding)
+				cm.Name = fmt.Sprintf("ktoolhu-%d", i%create)
 
-				wg.Add(1)
-				go func(i int) {
-					defer wg.Done()
-					defer func() { <-parallelCh }()
-
-					cm := buildCM(i, padding)
-
-					_, err := client.Create(ctx, cm, metav1.CreateOptions{})
-					if err != nil && !kerrors.IsAlreadyExists(err) {
-						fmt.Printf("Failed to create configmap: %+v\n", err)
-					}
-				}(i)
-			}
-
-			wg.Wait()
-
-			for i := 0; i < update; i++ {
-				parallelCh <- struct{}{}
-
-				wg.Add(1)
-				go func(i int) {
-					defer wg.Done()
-					defer func() { <-parallelCh }()
-
-					cm := buildCM(i, padding)
-					cm.Name = fmt.Sprintf("ktoolhu-%d", i%create)
-
-					_, err := client.Update(ctx, cm, metav1.UpdateOptions{})
-					if err != nil {
-						fmt.Printf("Failed to create configmap: %+v\n", err)
-					}
-				}(i)
-			}
-
-			wg.Wait()
+				_, err := client.Update(ctx, cm, metav1.UpdateOptions{})
+				if err != nil {
+					fmt.Printf("Failed to create configmap: %+v\n", err)
+				}
+			})
 		},
 	}
 )
@@ -110,6 +86,26 @@ func buildCM(i int, padding string) *corev1.ConfigMap {
 	cm.Data = map[string]string{"data": fmt.Sprintf("%d%s", i, padding)}
 
 	return cm
+}
+
+func runParallel(parallel int, count int, f func(int)) {
+	parallelCh := make(chan struct{}, parallel)
+
+	wg := sync.WaitGroup{}
+
+	for i := 0; i < update; i++ {
+		parallelCh <- struct{}{}
+
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			defer func() { <-parallelCh }()
+
+			f(i)
+		}(i)
+	}
+
+	wg.Wait()
 }
 
 func init() {
