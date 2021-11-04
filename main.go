@@ -26,12 +26,7 @@ var (
 	parallel int
 	size     int
 
-	padding = func() (p string) {
-		for i := 0; i < size; i++ {
-			p += "="
-		}
-		return
-	}()
+	padding string
 
 	rootCmd = &cobra.Command{
 		Use:               "ktoolhu",
