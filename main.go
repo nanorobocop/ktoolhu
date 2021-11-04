@@ -93,7 +93,7 @@ func runParallel(parallel int, count int, f func(int)) {
 
 	wg := sync.WaitGroup{}
 
-	for i := 0; i < update; i++ {
+	for i := 0; i < count; i++ {
 		parallelCh <- struct{}{}
 
 		wg.Add(1)
