@@ -18,8 +18,10 @@ import (
 	kerrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/strategicpatch"
+	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/clientcmd"
 	"k8s.io/client-go/util/homedir"
@@ -39,6 +41,9 @@ var (
 	size     int
 
 	padding string
+
+	assumeYes           bool
+	deleteTerminatingNs bool
 
 	rootCmd = &cobra.Command{
 		Use:               "ktoolhu",
@@ -232,6 +237,106 @@ Could be useful to check speed of K8s api or trigger etcd compact/defrag feature
 			fmt.Println(string(decoded))
 		},
 	}
+
+	terminatingNsCmd = &cobra.Command{
+		Use:   "terminating-ns",
+		Short: "List or delete terminating namespaces",
+		Long:  `NOTE: this command will remove finalizers from child objects. This is NOT how finalizers suppose to work. Do on your own risk!`,
+		Run: func(cmd *cobra.Command, args []string) {
+			ctx := context.Background()
+
+			clientset := initK8s()
+
+			dynamicClient := initDynamicK8s()
+
+			namespaces, err := clientset.CoreV1().Namespaces().List(ctx, metav1.ListOptions{})
+			if err != nil {
+				fmt.Printf("Failed to list namespaces: %+v\n", err)
+				os.Exit(1)
+			}
+			terminatingNs := []corev1.Namespace{}
+			for _, ns := range namespaces.Items {
+				if ns.DeletionTimestamp != nil {
+					terminatingNs = append(terminatingNs, ns)
+				}
+			}
+			fmt.Printf("Found %d terminating out of %d namespaces\n", len(terminatingNs), len(namespaces.Items))
+
+			if len(terminatingNs) == 0 {
+				os.Exit(0)
+			}
+
+			namespacedResources, err := clientset.DiscoveryClient.ServerPreferredNamespacedResources()
+			if err != nil {
+				fmt.Printf("Failed to get namespaced resources: %+v\n", err)
+				os.Exit(1)
+			}
+			fmt.Printf("Found %d namespaced resources\n", len(namespacedResources))
+
+			for _, ns := range terminatingNs {
+				fmt.Printf("Namespace %s is terminating since %s\n", ns.Name, ns.DeletionTimestamp)
+
+				for _, resources := range namespacedResources {
+					gv, err := schema.ParseGroupVersion(resources.GroupVersion)
+					if err != nil {
+						fmt.Printf("Failed to parse groupversion: %+v", err)
+						os.Exit(1)
+					}
+
+					for _, rs := range resources.APIResources {
+						canList := false
+						for _, v := range rs.Verbs {
+							if v == "list" {
+								canList = true
+								break
+							}
+						}
+						if !canList {
+							continue
+						}
+
+						gvr := gv.WithResource(rs.Name)
+						client := dynamicClient.Resource(gvr)
+
+						objects, err := client.Namespace(ns.Name).List(ctx, metav1.ListOptions{})
+						if err != nil {
+							fmt.Printf("Failed to get %+v from %s namespace: %+v\n", gvr, ns.Name, err)
+							continue
+						}
+
+						for _, obj := range objects.Items {
+							gvk := obj.GroupVersionKind()
+							name := obj.GetName()
+							delTs := obj.GetDeletionTimestamp()
+
+							finalizers := obj.GetFinalizers()
+							fmt.Printf("Namespaced resource %s/%s is terminating since %s and has finalizers %q.\n", gvk.Kind, name, delTs, finalizers)
+							if !deleteTerminatingNs {
+								continue
+							}
+
+							if !assumeYes {
+								fmt.Printf("Remove finalizers? [y/n] ")
+
+								var answer string
+								fmt.Scanln(&answer)
+								if answer != "y" {
+									continue
+								}
+							}
+							obj2 := obj.DeepCopy()
+							obj2.SetFinalizers(nil)
+							_, err := client.Namespace(ns.Name).Update(ctx, obj2, metav1.UpdateOptions{})
+							if err != nil {
+								fmt.Printf("Failed to update %s/%s: %+v\n", gvk.Kind, name, err)
+								os.Exit(1)
+							}
+						}
+					}
+				}
+			}
+		},
+	}
 )
 
 func createRestartPatch(obj runtime.Object) ([]byte, error) {
@@ -314,6 +419,9 @@ func init() {
 
 	rootCmd.AddCommand(restartAllCmd)
 	rootCmd.AddCommand(secretCmd)
+	rootCmd.AddCommand(terminatingNsCmd)
+	terminatingNsCmd.Flags().BoolVarP(&assumeYes, "yes", "y", false, "assume yes")
+	terminatingNsCmd.Flags().BoolVar(&deleteTerminatingNs, "delete", false, "delete")
 
 	for i := 0; i < size; i++ {
 		padding += "="
@@ -332,6 +440,20 @@ func initK8s() *kubernetes.Clientset {
 	}
 
 	return clientset
+}
+
+func initDynamicK8s() dynamic.Interface {
+	config, err := clientcmd.BuildConfigFromFlags("", kubeconfig)
+	if err != nil {
+		panic(err.Error())
+	}
+
+	dynamicClient, err := dynamic.NewForConfig(config)
+	if err != nil {
+		panic(err.Error())
+	}
+
+	return dynamicClient
 }
 
 func main() {
