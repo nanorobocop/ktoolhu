@@ -2,19 +2,28 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
 	"sync"
+	"time"
 
 	"github.com/spf13/cobra"
 
 	corev1 "k8s.io/api/core/v1"
 	kerrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/apimachinery/pkg/util/strategicpatch"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/clientcmd"
 	"k8s.io/client-go/util/homedir"
+)
+
+const (
+	appName = "ktoolhu"
 )
 
 var (
@@ -71,7 +80,132 @@ Could be useful to check speed of K8s api or trigger etcd compact/defrag feature
 			})
 		},
 	}
+
+	restartAllCmd = &cobra.Command{
+		Use:   "restart-all",
+		Short: "Restart all workload in cluster or namespace",
+		Run: func(cmd *cobra.Command, args []string) {
+			ctx := context.Background()
+
+			clientset := initK8s()
+
+			var namespaces []corev1.Namespace
+
+			if namespace != "" {
+				ns, err := clientset.CoreV1().Namespaces().Get(ctx, namespace, metav1.GetOptions{})
+				if err != nil {
+					fmt.Printf("Failed to get namespace %s: %+v\n", namespace, err)
+					os.Exit(1)
+				}
+
+				namespaces = []corev1.Namespace{*ns}
+			} else {
+				namespacesList, err := clientset.CoreV1().Namespaces().List(ctx, metav1.ListOptions{})
+				if err != nil {
+					fmt.Printf("Failed to list namespaces: %+v\n", err)
+					os.Exit(1)
+				}
+				namespaces = namespacesList.Items
+			}
+
+			for _, ns := range namespaces {
+				deployments, err := clientset.AppsV1().Deployments(ns.Name).List(ctx, metav1.ListOptions{})
+				if err != nil {
+					fmt.Printf("Failed to list deployments: %+v\n", err)
+					os.Exit(1)
+				}
+
+				for _, deployment := range deployments.Items {
+					fmt.Printf("Namespace %s, restarting deployment %s\n", ns.Name, deployment.Name)
+					patch, err := createRestartPatch(&deployment)
+					if err != nil {
+						fmt.Printf("Failed to create patch to restart %s: %+v\n", deployment.Name, err)
+						os.Exit(1)
+					}
+					_, err = clientset.AppsV1().Deployments(ns.Name).Patch(ctx, deployment.Name, types.StrategicMergePatchType, patch, metav1.PatchOptions{})
+					if err != nil {
+						fmt.Printf("Failed to patch : %+v\n", err)
+						os.Exit(1)
+					}
+				}
+
+				daemonsets, err := clientset.AppsV1().DaemonSets(ns.Name).List(ctx, metav1.ListOptions{})
+				if err != nil {
+					fmt.Printf("Failed to list deployments: %+v\n", err)
+					os.Exit(1)
+				}
+
+				for _, daemonset := range daemonsets.Items {
+					fmt.Printf("Namespace %s, restarting daemonset %s\n", ns.Name, daemonset.Name)
+					patch, err := createRestartPatch(&daemonset)
+					if err != nil {
+						fmt.Printf("Failed to create patch to restart %s: %+v\n", daemonset.Name, err)
+						os.Exit(1)
+					}
+					_, err = clientset.AppsV1().DaemonSets(ns.Name).Patch(ctx, daemonset.Name, types.StrategicMergePatchType, patch, metav1.PatchOptions{})
+					if err != nil {
+						fmt.Printf("Failed to patch: %+v\n", err)
+						os.Exit(1)
+					}
+				}
+
+				statefulsets, err := clientset.AppsV1().StatefulSets(ns.Name).List(ctx, metav1.ListOptions{})
+				if err != nil {
+					fmt.Printf("Failed to list statefulsets: %+v\n", err)
+					os.Exit(1)
+				}
+
+				for _, statefulset := range statefulsets.Items {
+					fmt.Printf("Namespace %s, restarting statefulset %s\n", ns.Name, statefulset.Name)
+					patch, err := createRestartPatch(&statefulset)
+					if err != nil {
+						fmt.Printf("Failed to create patch to restart %s: %+v\n", statefulset.Name, err)
+						os.Exit(1)
+					}
+					_, err = clientset.AppsV1().StatefulSets(ns.Name).Patch(ctx, statefulset.Name, types.StrategicMergePatchType, patch, metav1.PatchOptions{})
+					if err != nil {
+						fmt.Printf("Failed to patch: %+v\n", err)
+						os.Exit(1)
+					}
+				}
+			}
+
+		},
+	}
 )
+
+func createRestartPatch(obj runtime.Object) ([]byte, error) {
+	obj2 := obj.DeepCopyObject()
+	obj2Unstructured, err := runtime.DefaultUnstructuredConverter.ToUnstructured(obj2)
+	if err != nil {
+		return nil, err
+	}
+
+	metadata, ok := obj2Unstructured["spec"].(map[string]interface{})["template"].(map[string]interface{})["metadata"].(map[string]interface{})
+	if !ok {
+		return nil, fmt.Errorf("Failed to extrace template metadata")
+	}
+
+	if _, ok := metadata["annotations"]; !ok {
+		metadata["annotations"] = map[string]interface{}{}
+	}
+
+	annotations := metadata["annotations"].(map[string]interface{})
+
+	annotations[appName+"/restartedAt"] = time.Now().Format(time.RFC3339)
+
+	objBytes, err := json.Marshal(obj)
+	if err != nil {
+		return nil, err
+	}
+
+	obj2Bytes, err := json.Marshal(obj2Unstructured)
+	if err != nil {
+		return nil, err
+	}
+
+	return strategicpatch.CreateTwoWayMergePatch(objBytes, obj2Bytes, obj)
+}
 
 func buildCM(i int, padding string) *corev1.ConfigMap {
 
@@ -105,7 +239,7 @@ func runParallel(parallel int, count int, f func(int)) {
 
 func init() {
 	if home := homedir.HomeDir(); home != "" {
-		rootCmd.PersistentFlags().StringVar(&kubeconfig, "kubeconfig", filepath.Join(home, ".kube", "config"), "(optional) absolute patth to the kubeconfig file")
+		rootCmd.PersistentFlags().StringVar(&kubeconfig, "kubeconfig", filepath.Join(home, ".kube", "config"), "absolute path to the kubeconfig file")
 	} else {
 		rootCmd.PersistentFlags().StringVar(&kubeconfig, "kubeconfig", "", "absolute path to the kubeconfig file")
 	}
@@ -117,6 +251,8 @@ func init() {
 	perfLoadConfigMapsCmd.Flags().IntVar(&update, "update", 1000, "amount cm to update, 0 for unlimited")
 	perfLoadConfigMapsCmd.Flags().IntVarP(&parallel, "parallel", "p", 1, "amount of parallel threads (aka concurrency)")
 	perfLoadConfigMapsCmd.Flags().IntVarP(&size, "size", "s", 1000, "size in bytes")
+
+	rootCmd.AddCommand(restartAllCmd)
 
 	for i := 0; i < size; i++ {
 		padding += "="
