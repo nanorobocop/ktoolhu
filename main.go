@@ -172,6 +172,27 @@ Could be useful to check speed of K8s api or trigger etcd compact/defrag feature
 
 		},
 	}
+
+	groupResourcesCmd = &cobra.Command{
+		Use:   "group-resources",
+		Short: "Show resources for each group-version (to find groups without resources)",
+		Run: func(cmd *cobra.Command, args []string) {
+			clientset := initK8s()
+
+			_, resources, err := clientset.Discovery().ServerGroupsAndResources()
+			if err != nil {
+				fmt.Printf("Failed to create configmap: %+v\n", err)
+			}
+
+			for _, group := range resources {
+				fmt.Printf("GroupVersion: %s\n", group.GroupVersion)
+				for _, resource := range group.APIResources {
+					fmt.Printf("    Resource: %s\n", resource.Name)
+				}
+			}
+
+		},
+	}
 )
 
 func createRestartPatch(obj runtime.Object) ([]byte, error) {
@@ -253,6 +274,7 @@ func init() {
 	perfLoadConfigMapsCmd.Flags().IntVarP(&size, "size", "s", 1000, "size in bytes")
 
 	rootCmd.AddCommand(restartAllCmd)
+	rootCmd.AddCommand(groupResourcesCmd)
 
 	for i := 0; i < size; i++ {
 		padding += "="

@@ -4,6 +4,7 @@ Ktoolhu is Kubernetes tool to do different weird things with K8s API.
 
 ## Features
 
+- `group-resources` - Show resources for each group-version (to find groups without resources)
 - `perf-configmaps` - Create or update configmaps multiple times to create load
 - `restart-all`     - Restart all workload in cluster or namespace
 
@@ -17,6 +18,7 @@ Usage:
   ktoolhu [command]
 
 Available Commands:
+  group-resources Show resources for each group-version (to find groups without resources)
   help            Help about any command
   perf-configmaps Create or update configmaps multiple times to create load
   restart-all     Restart all workload in cluster or namespace
