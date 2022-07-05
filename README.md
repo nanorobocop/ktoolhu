@@ -6,6 +6,8 @@ Ktoolhu is Kubernetes tool to do different weird things with K8s API.
 
 - `perf-configmaps` - Create or update configmaps multiple times to create load
 - `restart-all`     - Restart all workload in cluster or namespace
+- `secret`          - Encode or decode k8s secret from stdin to stdout (yaml or json)
+
 
 ## Usage
 
@@ -20,6 +22,8 @@ Available Commands:
   help            Help about any command
   perf-configmaps Create or update configmaps multiple times to create load
   restart-all     Restart all workload in cluster or namespace
+  secret          Encode or decode k8s secret from stdin to stdout (yaml or json)
+
 
 Flags:
   -h, --help                help for ktoolhu

@@ -2,14 +2,17 @@ package main
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"io/ioutil"
 	"os"
 	"path/filepath"
 	"sync"
 	"time"
 
 	"github.com/spf13/cobra"
+	"gopkg.in/yaml.v2"
 
 	corev1 "k8s.io/api/core/v1"
 	kerrors "k8s.io/apimachinery/pkg/api/errors"
@@ -172,6 +175,63 @@ Could be useful to check speed of K8s api or trigger etcd compact/defrag feature
 
 		},
 	}
+
+	secretCmd = &cobra.Command{
+		Use:   "secret",
+		Short: "Encode or decode k8s secret from stdin to stdout (yaml or json)",
+		Run: func(cmd *cobra.Command, args []string) {
+			fmt.Fprintf(os.Stderr, "Reading from stdin...")
+			inputBytes, err := ioutil.ReadAll(os.Stdin)
+			if err != nil {
+				fmt.Println("Failed to read from stdin:", err.Error())
+				os.Exit(1)
+			}
+
+			secret := map[string]interface{}{}
+			if err = yaml.Unmarshal(inputBytes, secret); err != nil {
+				if err2 := json.Unmarshal(inputBytes, &secret); err2 != nil {
+					fmt.Println("Failed to parse input as yaml or json:", err, err2)
+					os.Exit(1)
+				}
+			}
+
+			data, ok := secret["data"].(map[interface{}]interface{})
+			if !ok {
+				fmt.Println("Input does not look like secret (missing 'data' or not map type)")
+				os.Exit(1)
+			}
+
+			encode := false
+			for k, v := range data {
+				vv, ok := v.(string)
+				if !ok {
+					fmt.Println("Key", k, "has non string type")
+					os.Exit(1)
+				}
+
+				if !encode {
+					if decoded, err := base64.StdEncoding.DecodeString(vv); err == nil {
+						data[k] = string(decoded)
+						continue
+					}
+					encode = true
+				}
+				if encode {
+					data[k] = base64.StdEncoding.EncodeToString([]byte(vv))
+				}
+			}
+
+			secret["data"] = data
+
+			decoded, err := yaml.Marshal(secret)
+			if err != nil {
+				fmt.Println("Failed to marshal to yaml:", err.Error())
+				os.Exit(1)
+			}
+
+			fmt.Println(string(decoded))
+		},
+	}
 )
 
 func createRestartPatch(obj runtime.Object) ([]byte, error) {
@@ -253,6 +313,7 @@ func init() {
 	perfLoadConfigMapsCmd.Flags().IntVarP(&size, "size", "s", 1000, "size in bytes")
 
 	rootCmd.AddCommand(restartAllCmd)
+	rootCmd.AddCommand(secretCmd)
 
 	for i := 0; i < size; i++ {
 		padding += "="
