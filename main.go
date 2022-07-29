@@ -42,8 +42,8 @@ var (
 
 	padding string
 
-	assumeYes           bool
-	deleteTerminatingNs bool
+	assumeYes  bool
+	deleteFlag bool
 
 	rootCmd = &cobra.Command{
 		Use:               "ktoolhu",
@@ -311,7 +311,7 @@ Could be useful to check speed of K8s api or trigger etcd compact/defrag feature
 
 							finalizers := obj.GetFinalizers()
 							fmt.Printf("Namespaced resource %s/%s is terminating since %s and has finalizers %q.\n", gvk.Kind, name, delTs, finalizers)
-							if !deleteTerminatingNs {
+							if !deleteFlag {
 								continue
 							}
 
@@ -331,6 +331,46 @@ Could be useful to check speed of K8s api or trigger etcd compact/defrag feature
 								fmt.Printf("Failed to update %s/%s: %+v\n", gvk.Kind, name, err)
 								os.Exit(1)
 							}
+						}
+					}
+				}
+			}
+		},
+	}
+
+	evictedPodsCmd = &cobra.Command{
+		Use:   "evicted-pods",
+		Short: "List or delete evicted pods",
+		Run: func(cmd *cobra.Command, args []string) {
+			ctx := context.Background()
+
+			clientset := initK8s()
+
+			namespaces, err := clientset.CoreV1().Namespaces().List(ctx, metav1.ListOptions{})
+			if err != nil {
+				fmt.Println("Failed to list namespaces:", err)
+				os.Exit(1)
+			}
+
+			for _, ns := range namespaces.Items {
+				pods, err := clientset.CoreV1().Pods(ns.Name).List(ctx, metav1.ListOptions{})
+				if err != nil {
+					fmt.Println("Failed to list pods:", err)
+					os.Exit(1)
+				}
+
+				for _, pod := range pods.Items {
+					if pod.Status.Reason != "Evicted" {
+						continue
+					}
+
+					fmt.Printf("Ns: %s, pod: %s, message: %s\n", ns.Name, pod.Name, pod.Status.Message)
+
+					if deleteFlag {
+						err = clientset.CoreV1().Pods(ns.Name).Delete(ctx, pod.Name, metav1.DeleteOptions{})
+						if err != nil {
+							fmt.Println("Failed to delete pod:", err)
+							os.Exit(1)
 						}
 					}
 				}
@@ -421,7 +461,10 @@ func init() {
 	rootCmd.AddCommand(secretCmd)
 	rootCmd.AddCommand(terminatingNsCmd)
 	terminatingNsCmd.Flags().BoolVarP(&assumeYes, "yes", "y", false, "assume yes")
-	terminatingNsCmd.Flags().BoolVar(&deleteTerminatingNs, "delete", false, "delete")
+	terminatingNsCmd.Flags().BoolVar(&deleteFlag, "delete", false, "delete")
+
+	rootCmd.AddCommand(evictedPodsCmd)
+	evictedPodsCmd.Flags().BoolVar(&deleteFlag, "delete", false, "delete")
 
 	for i := 0; i < size; i++ {
 		padding += "="

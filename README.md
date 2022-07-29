@@ -4,6 +4,7 @@ Ktoolhu is Kubernetes tool to do different weird things with K8s API.
 
 ## Features
 
+- `evicted-pods`    - List or delete evicted pods
 - `perf-configmaps` - Create or update configmaps multiple times to create load
 - `restart-all`     - Restart all workload in cluster or namespace
 - `secret`          - Encode or decode k8s secret from stdin to stdout (yaml or json)
@@ -20,6 +21,7 @@ Usage:
   ktoolhu [command]
 
 Available Commands:
+  evicted-pods    List or delete evicted pods
   help            Help about any command
   perf-configmaps Create or update configmaps multiple times to create load
   restart-all     Restart all workload in cluster or namespace
