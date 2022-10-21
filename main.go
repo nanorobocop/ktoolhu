@@ -208,6 +208,9 @@ Could be useful to check speed of K8s api or trigger etcd compact/defrag feature
 
 			encode := false
 			for k, v := range data {
+				if v == nil {
+					continue
+				}
 				vv, ok := v.(string)
 				if !ok {
 					fmt.Println("Key", k, "has non string type")
