@@ -377,6 +377,103 @@ Could be useful to check speed of K8s api or trigger etcd compact/defrag feature
 			}
 		},
 	}
+
+	fsExportCmd = &cobra.Command{
+		Use:   "fs-export",
+		Short: "Export cluster objects to file system",
+		Long: `Following file system structure will be created:
+TBD
+`,
+		Run: func(cmd *cobra.Command, args []string) {
+			ctx := context.Background()
+
+			clientset := initK8s()
+
+			dynamicClient := initDynamicK8s()
+
+			resources, err := clientset.DiscoveryClient.ServerPreferredResources()
+			if err != nil {
+				fmt.Printf("Failed to get namespaced resources: %+v\n", err)
+				os.Exit(1)
+			}
+			fmt.Printf("Found %d resources\n", len(resources))
+
+			namespaces, err := clientset.CoreV1().Namespaces().List(ctx, metav1.ListOptions{})
+			if err != nil {
+				fmt.Printf("Failed to list namespaces: %+v\n", err)
+				os.Exit(1)
+			}
+
+			if namespace == "" {
+				for _, resource := range resources {
+
+				}
+			}
+
+			for _, ns := range namespaces {
+				fmt.Printf("Namespace %s is terminating since %s\n", ns.Name, ns.DeletionTimestamp)
+
+				for _, resources := range namespacedResources {
+					gv, err := schema.ParseGroupVersion(resources.GroupVersion)
+					if err != nil {
+						fmt.Printf("Failed to parse groupversion: %+v", err)
+						os.Exit(1)
+					}
+
+					for _, rs := range resources.APIResources {
+						canList := false
+						for _, v := range rs.Verbs {
+							if v == "list" {
+								canList = true
+								break
+							}
+						}
+						if !canList {
+							continue
+						}
+
+						gvr := gv.WithResource(rs.Name)
+						client := dynamicClient.Resource(gvr)
+
+						objects, err := client.Namespace(ns.Name).List(ctx, metav1.ListOptions{})
+						if err != nil {
+							fmt.Printf("Failed to get %+v from %s namespace: %+v\n", gvr, ns.Name, err)
+							continue
+						}
+
+						for _, obj := range objects.Items {
+							gvk := obj.GroupVersionKind()
+							name := obj.GetName()
+							delTs := obj.GetDeletionTimestamp()
+
+							finalizers := obj.GetFinalizers()
+							fmt.Printf("Namespaced resource %s/%s is terminating since %s and has finalizers %q.\n", gvk.Kind, name, delTs, finalizers)
+							if !deleteFlag {
+								continue
+							}
+
+							if !assumeYes {
+								fmt.Printf("Remove finalizers? [y/n] ")
+
+								var answer string
+								fmt.Scanln(&answer)
+								if answer != "y" {
+									continue
+								}
+							}
+							obj2 := obj.DeepCopy()
+							obj2.SetFinalizers(nil)
+							_, err := client.Namespace(ns.Name).Update(ctx, obj2, metav1.UpdateOptions{})
+							if err != nil {
+								fmt.Printf("Failed to update %s/%s: %+v\n", gvk.Kind, name, err)
+								os.Exit(1)
+							}
+						}
+					}
+				}
+			}
+		},
+	}
 )
 
 func createRestartPatch(obj runtime.Object) ([]byte, error) {
